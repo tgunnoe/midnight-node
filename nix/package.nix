@@ -68,6 +68,7 @@
     // lib.optionalAttrs pkgs.stdenv.isDarwin {
       # for bindgen, used by libproc, used by metrics_process
       LIBCLANG_PATH = "${lib.getLib pkgs.llvmPackages.libclang}/lib";
+      CRATE_CC_NO_DEFAULTS = "1";
     };
 
   cargoArtifacts = craneLib.buildDepsOnly commonArgs;
