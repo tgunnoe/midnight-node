@@ -3,20 +3,23 @@
     flake-utils.url = "github:numtide/flake-utils";
     nixpkgs.url = "github:nixos/nixpkgs/nixos-25.05";
     crane.url = "github:ipetkov/crane";
-    fenix = {
-      url = "github:nix-community/fenix";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
   outputs = { self, nixpkgs, flake-utils, ... }@inputs:
     flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = nixpkgs.legacyPackages.${system};
+      pkgs = import inputs.nixpkgs {
+        inherit system;
+        overlays = [ inputs.rust-overlay.overlays.default ];
+      };
       isDarwin = pkgs.lib.hasSuffix "darwin" system;
       isDarwinAArch64 = system == "aarch64-darwin";
     in {
       packages.default = import ./nix/package.nix {
-        inherit inputs;
+        inherit inputs pkgs;
         targetSystem = system;
       };
 
