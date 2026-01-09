@@ -1,19 +1,13 @@
 {
   inputs,
-  targetSystem,
+  pkgs,
+  targetSystem
 }: let
-  pkgs = inputs.nixpkgs.legacyPackages.${targetSystem};
   inherit (pkgs) lib;
 
-  fenix = inputs.fenix.packages.${pkgs.system};
-
-  # A toolchain with the wasm32 target available:
-  rustToolchain = fenix.combine [
-    fenix.stable.toolchain
-    fenix.targets.wasm32-unknown-unknown.stable.rust-std
-    fenix.stable.rust-src
-    fenix.stable.llvm-tools
-  ];
+  # use rust-toolchain as a basis
+  # wasm32v1-none renders compiling std from source irrelevant
+  rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ../rust-toolchain.toml;
 
   craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
 
@@ -36,10 +30,6 @@
       inherit src;
       strictDeps = true;
 
-      # FIXME: `frame-storage-access-test-runtime`’s `build.rs` script fails otherwise, it’d be good to fix, see:
-      # <https://github.com/paritytech/polkadot-sdk/blob/6fd693e6d9cfa46cd2acbcb41cd5b0451a62d67c/substrate/utils/frame/storage-access-test-runtime/build.rs>
-      SKIP_WASM_BUILD = 1;
-
       nativeBuildInputs =
         [
           pkgs.gnum4
@@ -47,6 +37,8 @@
         ]
         ++ lib.optionals pkgs.stdenv.isLinux [
           pkgs.pkg-config
+          pkgs.llvmPackages.lld
+          pkgs.stdenv.cc.cc.lib
         ];
       buildInputs =
         lib.optionals pkgs.stdenv.isLinux [
@@ -60,10 +52,15 @@
         ];
     }
     // lib.optionalAttrs pkgs.stdenv.isLinux {
-      # The linker bundled with Fenix has wrong interpreter path, and it fails with ENOENT, so:
-      RUSTFLAGS = "-Clink-arg=-fuse-ld=bfd";
-      # The same problem for the Wasm linker:
-      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER = "${pkgs.llvmPackages.lld}/bin/wasm-ld";
+      # Use lld for faster linking and better handling of large projects
+        RUSTFLAGS = "-Clink-arg=-fuse-ld=lld";
+      # The Wasm linker for wasm32v1-none target:
+        CARGO_TARGET_WASM32V1_NONE_LINKER = "${pkgs.llvmPackages.lld}/bin/wasm-ld";
+        # Required for substrate-wasm-builder to find libstdc++
+        LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib";
+        # Skip WASM build for polkadot-sdk test runtime (has broken path deps to cumulus when vendored)
+        # See: https://paritytech.github.io/polkadot-sdk/master/substrate_wasm_builder/index.html
+        SKIP_FRAME_STORAGE_ACCESS_TEST_RUNTIME_WASM_BUILD = "1";
     }
     // lib.optionalAttrs pkgs.stdenv.isDarwin {
       # for bindgen, used by libproc, used by metrics_process
