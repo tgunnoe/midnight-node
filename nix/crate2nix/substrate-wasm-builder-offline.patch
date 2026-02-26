@@ -1,0 +1,81 @@
+--- a/substrate/utils/wasm-builder/src/wasm_project.rs	2026-01-27 02:02:38.573376942 -0500
++++ b/substrate/utils/wasm-builder/src/wasm_project.rs	2026-01-27 02:03:31.575503475 -0500
+@@ -78,6 +78,46 @@
+ 	}
+ }
+ 
++/// Try to load cargo metadata from a pre-generated JSON file.
++/// This is useful for sandboxed builds (like Nix with crate2nix) where
++/// `cargo metadata` cannot fetch dependencies from the network.
++///
++/// Set `WASM_BUILD_METADATA_PATH` to the path of a JSON file containing
++/// the output of `cargo metadata --format-version 1`.
++fn try_load_metadata_from_file() -> Option<Metadata> {
++	let metadata_path = env::var("WASM_BUILD_METADATA_PATH").ok()?;
++	println!("cargo:rerun-if-env-changed=WASM_BUILD_METADATA_PATH");
++
++	let metadata_json = match fs::read_to_string(&metadata_path) {
++		Ok(json) => json,
++		Err(e) => {
++			eprintln!("Warning: Failed to read metadata from {}: {}", metadata_path, e);
++			return None;
++		}
++	};
++
++	serde_json::from_str(&metadata_json)
++		.map_err(|e| eprintln!("Warning: Failed to parse metadata JSON: {}", e))
++		.ok()
++}
++
++/// Get an override for the workspace root path from environment.
++/// This is needed for sandboxed builds where the workspace_root in cargo metadata
++/// points to a path that doesn't exist in the build environment.
++///
++/// Set `WASM_BUILD_WORKSPACE_ROOT` to the actual workspace root path.
++fn get_workspace_root_override() -> Option<PathBuf> {
++	let workspace_root = env::var("WASM_BUILD_WORKSPACE_ROOT").ok()?;
++	println!("cargo:rerun-if-env-changed=WASM_BUILD_WORKSPACE_ROOT");
++	let path = PathBuf::from(&workspace_root);
++	if path.exists() {
++		Some(path)
++	} else {
++		eprintln!("Warning: WASM_BUILD_WORKSPACE_ROOT path does not exist: {}", workspace_root);
++		None
++	}
++}
++
+ fn crate_metadata(cargo_manifest: &Path) -> Metadata {
+ 	let mut cargo_lock = cargo_manifest.to_path_buf();
+ 	cargo_lock.set_file_name("Cargo.lock");
+@@ -93,6 +133,12 @@
+ 		cargo_manifest.to_path_buf()
+ 	};
+ 
++	// Try to load pre-generated metadata first (for sandboxed/offline builds)
++	if let Some(metadata) = try_load_metadata_from_file() {
++		println!("cargo:warning=Using pre-generated cargo metadata from WASM_BUILD_METADATA_PATH");
++		return metadata;
++	}
++
+ 	let crate_metadata_command = create_metadata_command(cargo_manifest);
+ 
+ 	let crate_metadata = crate_metadata_command
+@@ -138,12 +184,17 @@
+ 
+ 	let crate_metadata = crate_metadata(orig_project_cargo_toml);
+ 
++	// Use workspace root override if provided, otherwise use the one from metadata
++	let workspace_root = get_workspace_root_override()
++		.unwrap_or_else(|| crate_metadata.workspace_root.clone().into());
++	println!("cargo:warning=Using workspace root: {}", workspace_root.display());
++
+ 	let project = create_project(
+ 		target,
+ 		orig_project_cargo_toml,
+ 		&runtime_workspace,
+ 		&crate_metadata,
+-		crate_metadata.workspace_root.as_ref(),
++		&workspace_root,
+ 		features_to_enable,
+ 	);
+ 	let wasm_project_cargo_toml = project.join("Cargo.toml");

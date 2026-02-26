@@ -1,8 +1,7 @@
 {
   inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.05";
-    crane.url = "github:ipetkov/crane";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -17,15 +16,25 @@
       };
       isDarwin = pkgs.lib.hasSuffix "darwin" system;
       isDarwinAArch64 = system == "aarch64-darwin";
-    in {
-      packages.default = import ./nix/package.nix {
-        inherit inputs pkgs;
-        targetSystem = system;
+    
+      # Load toolchain from rust-toolchain.toml
+      rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+
+      # Import the crate2nix build
+      crate2nixBuild = import ./nix/crate2nix/package.nix {
+        inherit pkgs rustToolchain;
+        src = ./.;
       };
 
-      devShells.default = let rust = [];
+    in {
+      # Packages built with crate2nix (incremental builds)
+      packages = {
+        midnight-node = crate2nixBuild.midnight-node;
+        midnight-node-toolkit = crate2nixBuild.midnight-node-toolkit;
+        default = crate2nixBuild.midnight-node;
+      };
 
-      in pkgs.mkShell {
+      devShells.default = pkgs.mkShell {
         packages = with pkgs; [
            earthly rustup clang pkg-config zlib
         ] ++ (if isDarwin
