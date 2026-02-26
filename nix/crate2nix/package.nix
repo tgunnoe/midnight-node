@@ -17,6 +17,7 @@
 { pkgs
 , rustToolchain
 , src  # The midnight-node source root
+, cargoNixPath ? null  # Optional: path to IFD-generated Cargo.nix (null = use pre-committed)
 }:
 
 let
@@ -47,11 +48,9 @@ let
   # Path to pre-generated cargo metadata JSON for offline WASM builds
   cargoMetadataPath = ./cargo-metadata.json;
 
-  # Import Cargo.nix directly — relative paths (../../node, etc.) resolve
-  # correctly relative to Cargo.nix's location, and lib.cleanSourceWith
-  # creates separate store paths per crate directory automatically,
-  # giving us per-crate rebuild granularity.
-  cargoNix = import ./Cargo.nix {
+  # Import Cargo.nix — either the pre-committed version (relative paths
+  # resolve correctly from its location) or an IFD-generated one.
+  cargoNix = import (if cargoNixPath != null then cargoNixPath else ./Cargo.nix) {
     inherit pkgs;
     # Override the default crate builder with our patched version
     buildRustCrateForPkgs = pkgs': patchedBuildRustCrate;
