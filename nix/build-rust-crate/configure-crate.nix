@@ -145,9 +145,17 @@ in
 
   export CARGO_CFG_TARGET_ARCH=${stdenv.hostPlatform.rust.platform.arch}
   export CARGO_CFG_TARGET_OS=${stdenv.hostPlatform.rust.platform.os}
-  export CARGO_CFG_TARGET_FAMILY="unix"
-  export CARGO_CFG_UNIX=1
-  export CARGO_CFG_TARGET_ENV="gnu"
+  export CARGO_CFG_TARGET_FAMILY="${
+    if stdenv.hostPlatform.isUnix then "unix"
+    else if stdenv.hostPlatform.isWindows then "windows"
+    else if stdenv.hostPlatform.isWasm then "wasm"
+    else ""
+  }"
+  ${lib.optionalString stdenv.hostPlatform.isUnix "export CARGO_CFG_UNIX=1"}
+  export CARGO_CFG_TARGET_ENV="${
+    let abi = stdenv.hostPlatform.parsed.abi.name or "";
+    in if abi == "unknown" || abi == "none" then "" else abi
+  }"
   export CARGO_CFG_TARGET_ENDIAN=${
     if stdenv.hostPlatform.parsed.cpu.significantByte.name == "littleEndian" then "little" else "big"
   }

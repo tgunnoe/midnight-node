@@ -17,7 +17,6 @@
 { pkgs
 , rustToolchain
 , src  # The midnight-node source root
-, cargoNixPath ? null  # Optional: path to IFD-generated Cargo.nix (null = use pre-committed)
 }:
 
 let
@@ -48,9 +47,133 @@ let
   # Path to pre-generated cargo metadata JSON for offline WASM builds
   cargoMetadataPath = ./cargo-metadata.json;
 
-  # Import Cargo.nix — either the pre-committed version (relative paths
-  # resolve correctly from its location) or an IFD-generated one.
-  cargoNix = import (if cargoNixPath != null then cargoNixPath else ./Cargo.nix) {
+  # ---------------------------------------------------------------------------
+  # WASM cross-compilation: build the runtime as wasm32v1-none cdylib
+  # ---------------------------------------------------------------------------
+
+  # Elaborate the WASM host platform definition.
+  # We use wasm32-unknown-unknown (not wasm32v1-none) because:
+  # 1. Its sysroot includes std, needed by proc-macro helpers (proc-macro2,
+  #    syn, quote) that crate2nix routes to the target platform.
+  # 2. With std available, we DON'T strip the std feature — this avoids
+  #    the panic_impl conflict (runtime's #[panic_handler] is behind
+  #    cfg(not(feature = "std")) and isn't compiled when std is enabled).
+  # 3. We add --cfg substrate_runtime so #[runtime_interface] generates
+  #    WASM stubs instead of host implementations.
+  # 4. We add -C target-cpu=mvp to restrict to MVP WASM features.
+  # nixpkgs can't elaborate wasm32-unknown-unknown directly, so we use
+  # wasm32-unknown-wasi as a base and override the Rust target.
+  wasmHostPlatform = let
+    base = lib.systems.elaborate { config = "wasm32-unknown-wasi"; };
+  in base // {
+    linker = "lld";
+    rust = base.rust // {
+      rustcTarget = "wasm32-unknown-unknown";
+      rustcTargetSpec = "wasm32-unknown-unknown";
+    };
+  };
+
+  # Cross-compilation stdenv for wasm32v1-none.
+  # We extend stdenvNoCC (no C compiler needed for pure Rust) with the
+  # WASM host platform. The buildPlatform stays as the native system
+  # so that build scripts and proc-macros compile and run natively.
+  wasmStdenv = pkgs.stdenvNoCC // {
+    hostPlatform = wasmHostPlatform;
+    hasCC = false;
+  };
+
+  # WASM crate overrides — baked into wasmBuildRustCrate so that
+  # Cargo.nix's defaultCrateOverrides matches pkgs.defaultCrateOverrides
+  # (bypassing the .override call which doesn't work with our wrapper).
+  wasmCrateOverrides = pkgs.defaultCrateOverrides // {
+    # Override crate type to cdylib for .wasm output
+    midnight-node-runtime = attrs: {
+      type = [ "cdylib" ];
+      SKIP_WASM_BUILD = "1";
+    };
+
+    # Disable sp-io's #[panic_handler] — it conflicts with std's panic_impl
+    # when building for wasm32-unknown-unknown (which links std).
+    sp-io = attrs: {
+      features = (attrs.features or []) ++ [ "disable_panic_handler" ];
+    };
+
+    # Bypass problematic nixpkgs patches for proc-macro-crate
+    proc-macro-crate = attrs: attrs // {
+      patches = [];
+      prePatch = "";
+      postPatch = "";
+      doCheck = false;
+    };
+  };
+
+  # buildRustCrate configured for wasm32v1-none output.
+  # Uses wasmStdenv so build-crate.nix adds --target wasm32v1-none to rustc
+  # and configure-crate.nix sets correct CARGO_CFG_TARGET_* env vars.
+  # Crate overrides are baked in here (not in Cargo.nix) to avoid the
+  # .override compatibility issue with our std-stripping wrapper.
+  wasmBuildRustCrateInner = pkgs.callPackage ../build-rust-crate {
+    stdenv = wasmStdenv;
+    rustc = rustToolchain;
+    cargo = rustToolchain;
+    defaultCodegenUnits = 1;
+    defaultCrateOverrides = wasmCrateOverrides;
+  };
+
+  # WASM crate builder: keeps all features (std included) since
+  # wasm32-unknown-unknown has std in the sysroot. Only adds:
+  # - substrate_runtime cfg: makes #[runtime_interface] generate WASM stubs
+  # - target-cpu=mvp: restricts to MVP WASM features
+  wasmBuildRustCrate = crate: wasmBuildRustCrateInner (crate // {
+    extraRustcOpts = (crate.extraRustcOpts or []) ++ [
+      "--cfg" "substrate_runtime"
+      "-C" "target-cpu=mvp"
+    ];
+  });
+
+  # Wrap native pkgs with WASM stdenv and overrides for Cargo.nix import.
+  # pkgs.buildPackages still points to native pkgs (since the base pkgs
+  # is non-cross), so proc-macros and build scripts compile natively.
+  # Setting defaultCrateOverrides to wasmCrateOverrides ensures the
+  # equality check in Cargo.nix (crateOverrides == pkgs.defaultCrateOverrides)
+  # is TRUE, which bypasses .override (incompatible with our std-stripping wrapper).
+  wasmPkgs = pkgs // {
+    stdenv = wasmStdenv;
+    defaultCrateOverrides = wasmCrateOverrides;
+  };
+
+  # Same Cargo.nix but targeting wasm — no default features (no_std).
+  # extraTargetFlags overrides the hardcoded env="gnu" in makeDefaultTarget.
+  wasmCargoNix = import ./Cargo.nix {
+    pkgs = wasmPkgs;
+    rootFeatures = [];  # no default, no std
+    extraTargetFlags = { env = ""; };
+    buildRustCrateForPkgs = pkgs':
+      if pkgs'.stdenv.hostPlatform.isWasm or false
+      then wasmBuildRustCrate
+      else patchedBuildRustCrate;
+  };
+
+  # Raw WASM runtime derivation — per-crate cached via crate2nix
+  wasmRuntimeRaw = wasmCargoNix.workspaceMembers."midnight-node-runtime".build;
+
+  # Compact the WASM blob with wasm-opt (runs on host platform)
+  wasmRuntime = pkgs.runCommand "midnight-runtime-wasm" {
+    nativeBuildInputs = [ pkgs.binaryen ];
+  } ''
+    mkdir -p $out
+    wasm-opt -O0 \
+      --strip-dwarf \
+      --signext-lowering \
+      ${wasmRuntimeRaw.lib}/lib/*midnight_node_runtime*.wasm \
+      -o $out/midnight_node_runtime.compact.wasm
+  '';
+
+  # Import Cargo.nix directly — relative paths (../../node, etc.) resolve
+  # correctly relative to Cargo.nix's location, and lib.cleanSourceWith
+  # creates separate store paths per crate directory automatically,
+  # giving us per-crate rebuild granularity.
+  cargoNix = import ./Cargo.nix {
     inherit pkgs;
     # Override the default crate builder with our patched version
     buildRustCrateForPkgs = pkgs': patchedBuildRustCrate;
@@ -106,13 +229,9 @@ let
         SKIP_FRAME_STORAGE_ACCESS_TEST_RUNTIME_WASM_BUILD = "1";
       };
 
-      # Override for the runtime crate
-      # Instead of trying to make substrate-wasm-builder work in the Nix sandbox,
-      # we skip it entirely. The build.rs will generate a dummy wasm_binary.rs
-      # when SKIP_WASM_BUILD is set.
+      # Inject the pre-built WASM binary instead of running nested cargo build.
       midnight-node-runtime = attrs: {
-        # Skip substrate-wasm-builder - the build.rs checks this and generates dummy WASM
-        SKIP_WASM_BUILD = "1";
+        WASM_BINARY_PATH = "${wasmRuntime}/midnight_node_runtime.compact.wasm";
         nativeBuildInputs = with pkgs; [
           pkg-config
           zlib
@@ -120,12 +239,11 @@ let
         ];
       };
 
-      # Keep the patch for substrate-wasm-builder disabled for now since
-      # SKIP_WASM_BUILD=1 means the patched code path won't run, and the patch
-      # adds serde_json usage without the corresponding dependency.
-      # substrate-wasm-builder = attrs: {
-      #   patches = (attrs.patches or []) ++ [ ./substrate-wasm-builder-offline.patch ];
-      # };
+      # Patch substrate-wasm-builder to check WASM_BINARY_PATH before
+      # attempting its own nested cargo build.
+      substrate-wasm-builder = attrs: {
+        patches = (attrs.patches or []) ++ [ ./substrate-wasm-builder-prebuilt.patch ];
+      };
 
       # Override for crates that need protobuf
       prost-build = attrs: {
@@ -218,12 +336,18 @@ let
   };
 
 in {
-  # Main midnight-node binary
+  # Main midnight-node binary (with embedded WASM runtime)
   midnight-node = cargoNix.workspaceMembers.midnight-node.build;
 
   # Toolkit utility
   midnight-node-toolkit = cargoNix.workspaceMembers.midnight-node-toolkit.build;
 
+  # Pre-built WASM runtime blob
+  inherit wasmRuntime;
+
   # Expose cargoNix for debugging
   inherit cargoNix;
+
+  # Debug: expose wasmCargoNix for feature inspection
+  inherit wasmCargoNix;
 }

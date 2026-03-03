@@ -1,0 +1,37 @@
+diff --git a/substrate/utils/wasm-builder/src/builder.rs b/substrate/utils/wasm-builder/src/builder.rs
+index 1d4182d6257..00c1ee2d411 100644
+--- a/substrate/utils/wasm-builder/src/builder.rs
++++ b/substrate/utils/wasm-builder/src/builder.rs
+@@ -261,6 +261,24 @@ impl WasmBuilder {
+ 			return
+ 		}
+ 
++		// Check for a pre-built WASM binary. If WASM_BINARY_PATH is set,
++		// use that file instead of building from scratch. This allows Nix
++		// and other sandboxed build systems to pre-build the WASM separately.
++		if let Ok(wasm_path) = env::var("WASM_BINARY_PATH") {
++			println!("cargo:rerun-if-env-changed=WASM_BINARY_PATH");
++			let wasm_path_escaped = wasm_path.escape_default();
++			crate::write_file_if_changed(
++				&file_path,
++				format!(
++					"pub const WASM_BINARY_PATH: Option<&str> = Some(\"{wasm_path_escaped}\");\
++					 pub const WASM_BINARY: Option<&[u8]> = Some(include_bytes!(\"{wasm_path_escaped}\"));\
++					 pub const WASM_BINARY_BLOATY: Option<&[u8]> = Some(include_bytes!(\"{wasm_path_escaped}\"));",
++				).as_str(),
++			);
++			generate_rerun_if_changed_instructions();
++			return
++		}
++
+ 		build_project(
+ 			target,
+ 			file_path,
+@@ -318,6 +336,7 @@ fn generate_rerun_if_changed_instructions() {
+ 	println!("cargo:rerun-if-env-changed={}", crate::SKIP_BUILD_ENV);
+ 	println!("cargo:rerun-if-env-changed={}", crate::FORCE_WASM_BUILD_ENV);
+ 	println!("cargo:rerun-if-env-changed={}", generate_crate_skip_build_env_name());
++	println!("cargo:rerun-if-env-changed=WASM_BINARY_PATH");
+ }
+ 
+ /// Build the currently built project as wasm binary.

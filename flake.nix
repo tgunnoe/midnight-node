@@ -6,13 +6,9 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    crate2nix = {
-      url = "github:tgunnoe/crate2nix";
-      flake = false;
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, crate2nix, ... }@inputs:
+  outputs = { self, nixpkgs, flake-utils, ... }@inputs:
     flake-utils.lib.eachDefaultSystem (system: let
       pkgs = import inputs.nixpkgs {
         inherit system;
@@ -24,36 +20,17 @@
       # Load toolchain from rust-toolchain.toml
       rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
-      # crate2nix tools for IFD-based Cargo.nix generation
-      crate2nixTools = import "${crate2nix}/tools.nix" { inherit pkgs; };
-
-      # Pre-committed Cargo.nix build (fast, no IFD)
       crate2nixBuild = import ./nix/crate2nix/package.nix {
         inherit pkgs rustToolchain;
         src = ./.;
       };
 
-      # IFD build: generates Cargo.nix at eval time from Cargo.lock
-      ifdCargoNix = crate2nixTools.generatedCargoNix {
-        name = "midnight-node";
-        src = ./.;
-        cargo = rustToolchain;
-      };
-      ifdBuild = import ./nix/crate2nix/package.nix {
-        inherit pkgs rustToolchain;
-        src = ./.;
-        cargoNixPath = ifdCargoNix;
-      };
-
     in {
-      # Default: pre-committed Cargo.nix (no IFD)
       packages = {
         midnight-node = crate2nixBuild.midnight-node;
         midnight-node-toolkit = crate2nixBuild.midnight-node-toolkit;
+        wasm-runtime = crate2nixBuild.wasmRuntime;
         default = crate2nixBuild.midnight-node;
-        # IFD variants: generate Cargo.nix at eval time
-        midnight-node-ifd = ifdBuild.midnight-node;
-        midnight-node-toolkit-ifd = ifdBuild.midnight-node-toolkit;
       };
 
       devShells.default = pkgs.mkShell {
