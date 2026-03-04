@@ -51,25 +51,15 @@ let
   # WASM cross-compilation: build the runtime as wasm32v1-none cdylib
   # ---------------------------------------------------------------------------
 
-  # Elaborate the WASM host platform definition.
-  # We use wasm32-unknown-unknown (not wasm32v1-none) because:
-  # 1. Its sysroot includes std, needed by proc-macro helpers (proc-macro2,
-  #    syn, quote) that crate2nix routes to the target platform.
-  # 2. With std available, we DON'T strip the std feature — this avoids
-  #    the panic_impl conflict (runtime's #[panic_handler] is behind
-  #    cfg(not(feature = "std")) and isn't compiled when std is enabled).
-  # 3. We add --cfg substrate_runtime so #[runtime_interface] generates
-  #    WASM stubs instead of host implementations.
-  # 4. We add -C target-cpu=mvp to restrict to MVP WASM features.
-  # nixpkgs can't elaborate wasm32-unknown-unknown directly, so we use
-  # wasm32-unknown-wasi as a base and override the Rust target.
+  # Elaborate the WASM host platform for wasm32v1-none (MVP-only, no std).
   wasmHostPlatform = let
-    base = lib.systems.elaborate { config = "wasm32-unknown-wasi"; };
+    base = lib.systems.elaborate { config = "wasm32-unknown-none"; };
   in base // {
     linker = "lld";
     rust = base.rust // {
-      rustcTarget = "wasm32-unknown-unknown";
-      rustcTargetSpec = "wasm32-unknown-unknown";
+      rustcTarget = "wasm32v1-none";
+      rustcTargetSpec = "wasm32v1-none";
+      platform = base.rust.platform // { os = "none"; };
     };
   };
 
@@ -90,12 +80,6 @@ let
     midnight-node-runtime = attrs: {
       type = [ "cdylib" ];
       SKIP_WASM_BUILD = "1";
-    };
-
-    # Disable sp-io's #[panic_handler] — it conflicts with std's panic_impl
-    # when building for wasm32-unknown-unknown (which links std).
-    sp-io = attrs: {
-      features = (attrs.features or []) ++ [ "disable_panic_handler" ];
     };
 
     # Bypass problematic nixpkgs patches for proc-macro-crate
@@ -120,14 +104,13 @@ let
     defaultCrateOverrides = wasmCrateOverrides;
   };
 
-  # WASM crate builder: keeps all features (std included) since
-  # wasm32-unknown-unknown has std in the sysroot. Only adds:
-  # - substrate_runtime cfg: makes #[runtime_interface] generate WASM stubs
-  # - target-cpu=mvp: restricts to MVP WASM features
+  # WASM crate builder: adds substrate_runtime cfg for runtime_interface
+  # WASM stub generation. Feature stripping (std, use_std, proc-macro, etc.)
+  # is handled by Cargo.nix's stripFeatures parameter BEFORE dependency
+  # resolution, so optional deps gated on these features are not activated.
   wasmBuildRustCrate = crate: wasmBuildRustCrateInner (crate // {
     extraRustcOpts = (crate.extraRustcOpts or []) ++ [
       "--cfg" "substrate_runtime"
-      "-C" "target-cpu=mvp"
     ];
   });
 
@@ -143,11 +126,32 @@ let
   };
 
   # Same Cargo.nix but targeting wasm — no default features (no_std).
-  # extraTargetFlags overrides the hardcoded env="gnu" in makeDefaultTarget.
+  # stripFeatures removes std-related features BEFORE dependency resolution,
+  # so optional deps gated on these features (like syn in macro_magic's
+  # proc_support) are not activated for the WASM build.
+  # hostPlatformCrates routes remaining proc-macro helpers that unconditionally
+  # need std to the build platform.
   wasmCargoNix = import ./Cargo.nix {
     pkgs = wasmPkgs;
     rootFeatures = [];  # no default, no std
     extraTargetFlags = { env = ""; };
+    stripFeatures = [
+      "std" "use_std" "proc-macro"
+      # Substrate/ecosystem features that gate proc-macro infrastructure
+      "proc_support"
+    ];
+    hostPlatformCrates = [
+      # These crates unconditionally require std and are only ever used
+      # by proc-macros / build scripts — never at WASM runtime.
+      "proc-macro2" "syn" "quote" "prettyplease"
+      "rustc_version" "semver"
+      # Proc-macro support crates that need std/proc-macro2
+      "macro_magic_core" "synstructure"
+      "darling_core" "derive_builder_core" "serde_derive_internals"
+      "frame-support-procedural-tools" "scale-typegen"
+      "polkavm-derive-impl" "expander"
+      "proc-macro2-diagnostics" "proc-macro-error" "proc-macro-error2" "proc-macro-warning"
+    ];
     buildRustCrateForPkgs = pkgs':
       if pkgs'.stdenv.hostPlatform.isWasm or false
       then wasmBuildRustCrate
