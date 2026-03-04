@@ -151,9 +151,9 @@ let
       "frame-support-procedural-tools" "scale-typegen"
       "polkavm-derive-impl" "expander"
       "proc-macro2-diagnostics" "proc-macro-error" "proc-macro-error2" "proc-macro-warning"
-      # C -sys crates that can't cross-compile to WASM (crypto ops are
-      # host functions in Substrate — the WASM runtime calls into the host)
-      "secp256k1-sys"
+      # C -sys crates that can't cross-compile to WASM and their Rust
+      # wrappers (crypto ops are host functions in Substrate)
+      "secp256k1-sys" "secp256k1"
     ];
     buildRustCrateForPkgs = pkgs':
       if pkgs'.stdenv.hostPlatform.isWasm or false
