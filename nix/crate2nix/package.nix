@@ -294,6 +294,7 @@ let
         nativeBuildInputs = (attrs.nativeBuildInputs or []) ++ [ pkgs.pkg-config pkgs.cmake ];
         buildInputs = (attrs.buildInputs or []) ++ [ pkgs.binaryen pkgs.libclang.lib ];
         LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+        CRATE_CC_NO_DEFAULTS = "1";
         dontCheckForBrokenSymlinks = true;
         postFixup = ''
           find $out -xtype l -delete || true
@@ -310,6 +311,7 @@ let
         };
       in attrs: {
         LIBCLANG_PATH = "${pkgs.clang.cc.lib}/lib";
+        CRATE_CC_NO_DEFAULTS = "1";
         patchPhase = ''
           cp -r ${binaryen116} binaryen
         '';
