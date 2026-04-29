@@ -1,0 +1,158 @@
+# Nix-based CI: replaces continuous-integration.yml's earthly invocations
+# with `nix build` of the packages defined in flake.nix.
+#
+# What this workflow does:
+#
+#   - lint:        cargo fmt + clippy via the dev shell
+#   - build:       nix build .#midnight-node and .#midnight-node-toolkit
+#                  on x86_64-linux and aarch64-linux
+#   - test:        cargo test --all-targets via the dev shell
+#   - oci-images:  build the nix2container OCI images
+#   - publish-oci: push images to GHCR (only on push to main / tags / dispatch)
+#
+# Earthly is no longer needed for any of these jobs. The nixConfig in
+# flake.nix declares cache.iog.io as a substituter, so most dependency
+# crates are pulled from cache rather than rebuilt.
+
+name: Nix CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*", "release/*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/nix-installer-action@v17
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+        continue-on-error: true
+      - name: cargo fmt --check
+        run: nix develop --command cargo fmt --all -- --check
+      - name: cargo clippy
+        run: nix develop --command cargo clippy --all-targets --all-features -- -D warnings
+
+  build:
+    name: Build (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/nix-installer-action@v17
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+        continue-on-error: true
+      - name: Build node + toolkit
+        run: nix build --print-build-logs .#midnight-node .#midnight-node-toolkit .#wasmRuntime
+      - name: Show binary sizes + version
+        run: |
+          ls -la result*/bin/ || true
+          ./result*/bin/midnight-node --version || true
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.system }}
+          path: |
+            result*/bin/midnight-node
+            result*/bin/midnight-node-toolkit
+          if-no-files-found: warn
+
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/nix-installer-action@v17
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+        continue-on-error: true
+      - name: cargo test
+        run: nix develop --command cargo test --all-targets
+
+  oci-images:
+    name: OCI images (${{ matrix.system }})
+    needs: [build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+            arch: amd64
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/nix-installer-action@v17
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+        continue-on-error: true
+      - name: Build node + toolkit OCI images
+        run: nix build --print-build-logs .#midnight-node-oci .#midnight-node-toolkit-oci
+
+  publish-oci:
+    name: Publish OCI images to GHCR
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: [oci-images]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+            arch: amd64
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/nix-installer-action@v17
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+        continue-on-error: true
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | nix shell nixpkgs#skopeo --command skopeo login -u "${{ github.actor }}" --password-stdin ghcr.io
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          GIT_REV=$(git rev-parse --short HEAD)
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}-${{ matrix.arch }}"
+          else
+            TAG="$GIT_REV-${{ matrix.arch }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: $TAG"
+
+      - name: Push midnight-node image
+        run: |
+          nix run .#midnight-node-oci.copyToRegistry -- \
+            docker://ghcr.io/midnightntwrk/midnight-node:${{ steps.tag.outputs.tag }}
+
+      - name: Push midnight-node-toolkit image
+        run: |
+          nix run .#midnight-node-toolkit-oci.copyToRegistry -- \
+            docker://ghcr.io/midnightntwrk/midnight-node-toolkit:${{ steps.tag.outputs.tag }}
