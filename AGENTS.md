@@ -12,22 +12,38 @@ Midnight Node is a Substrate-based blockchain implementation for the Midnight ne
 
 **Run specific test:** `cargo test test_name` or `cargo test -- --nocapture` for output
 
-**Earthly commands:**
+**Nix-based build (replaced earthly):**
 ```bash
-earthly -P +rebuild-metadata              # Update runtime metadata
-earthly -P +rebuild-chainspec --NETWORK=<network>  # Rebuild chainspec for network
-earthly -P +rebuild-all-chainspecs        # Rebuild all chainspecs
-earthly -P +rebuild-genesis-state-<NETWORK>  # Rebuild genesis for specific network
-earthly -P +rebuild-all-genesis-states    # Rebuild all network genesis states
-earthly +node-image                       # Build node Docker image
-earthly +toolkit-image                    # Build toolkit image
-earthly doc                               # List all available targets
+nix develop                              # Enter dev shell (rust toolchain pinned via rust-toolchain.toml)
+nix build .#midnight-node                # Build the node binary
+nix build .#midnight-node-toolkit        # Build the toolkit
+nix build .#wasmRuntime                  # Build the runtime WASM blob
+nix build .#midnight-node-oci            # Build the node OCI image (nix2container)
+nix build .#midnight-node-toolkit-oci    # Build the toolkit OCI image
 ```
 
-**GitHub PR bots:** Comment on a PR to trigger rebuilds:
-- `/bot rebuild-metadata` - Rebuild runtime metadata
-- `/bot rebuild-chainspec <network1> <network2>` - Rebuild chainspecs for specified networks
-- `/bot cargo-fmt` - Run cargo fmt
+**Just recipes (replaces the Earthfile +rebuild-* targets):**
+```bash
+just generate-genesis-state <NETWORK> [FUND_FAUCET_WALLETS]  # Regen .mn files
+just generate-chain-spec <NETWORK>                            # Regen chainspec.json + raw + abridged
+just rebuild-network <NETWORK>                                # Both of the above
+just rebuild-all                                              # All regeneratable networks
+just push-node-oci ghcr.io/midnightntwrk/midnight-node:tag    # Push node image
+just push-toolkit-oci ghcr.io/midnightntwrk/midnight-node-toolkit:tag
+just lint / fmt / test / check                                # Code quality
+```
+
+The `just generate-chain-spec` recipe reads `chainspec_id` from
+`res/cfg/<NETWORK>.toml` as the source of truth, derives the expected
+`networkId` (the same way midnight-node does internally), and refuses
+to continue when the generated chainspec disagrees — guards against
+the silent state mismatch class.
+
+**GitHub PR bots:** the `/bot rebuild-metadata` and
+`/bot rebuild-chainspec` workflows that previously drove earthly have
+been removed. To replace them, port a workflow that comments on a PR
+and shells out to `nix develop --command just rebuild-network <name>`
++ `git commit`. (Tracked as a follow-up.)
 
 **E2E tests (just):**
 ```bash

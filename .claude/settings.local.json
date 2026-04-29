@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git merge origin/test/perf_env --no-edit -m \"Merge test/perf_env for additional logging\")",
+      "Bash(git merge:*)",
+      "Bash(nix develop:*)",
+      "Bash(git:*)",
+      "Bash(xargs ls:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "WebSearch",
+      "Bash(nix eval:*)",
+      "Bash(nix-instantiate:*)",
+      "Bash(cargo metadata:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(nix log:*)"
+    ]
+  }
+}
