@@ -1,6 +1,7 @@
 {inputs, ...}: {
   imports = [
     ./devShells
+    ./packages
   ];
 
   perSystem = {system, ...}: {

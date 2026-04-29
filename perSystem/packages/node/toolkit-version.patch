@@ -1,0 +1,13 @@
+diff --git a/util/toolkit/src/cli.rs b/util/toolkit/src/cli.rs
+index 335427e3..24623ad0 100644
+--- a/util/toolkit/src/cli.rs
++++ b/util/toolkit/src/cli.rs
+@@ -215,6 +215,8 @@ pub async fn run_command(cmd: Commands) -> Result<(), Box<dyn std::error::Error
+ 		},
+ 		Commands::Version => {
+ 			let node_version = utils::find_crate_version!("../../../node/Cargo.toml");
++			let git_commit = option_env!("SUBSTRATE_CLI_GIT_COMMIT_HASH").unwrap_or("unknown");
++			let node_version = format!("{}-{}", node_version, git_commit);
+ 			let ledger_version =
+ 				find_dependency_version("mn-ledger").expect("missing ledger version");
+ 			let compactc_version = include_str!("../../../COMPACTC_VERSION").trim();

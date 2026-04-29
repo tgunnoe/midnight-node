@@ -11,6 +11,18 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    crate2nix = {
+      url = "github:tgunnoe/crate2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # Patched buildRustCrate with packageId-based rename lookups for
+    # crate2nix outputs where renamed git deps would otherwise collide.
+    build-rust-crate = {
+      url = "github:tgunnoe/build-rust-crate";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs:

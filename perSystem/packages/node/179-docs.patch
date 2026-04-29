@@ -1,0 +1,68 @@
+From 517c97fa575f0b5a44ba1865116696cfab47a8b7 Mon Sep 17 00:00:00 2001
+From: Michal Rus <michal.rus@iohk.io>
+Date: Tue, 28 Oct 2025 16:28:24 +0100
+Subject: [PATCH 1/2] chore: add a Nix package definition for `midnight-node`
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This requires small changes in `midnight-ledger` to make it work with
+`cargo-vendor`. The changes against `main` can be seen in
+<https://github.com/midnightntwrk/midnight-ledger/pull/81> there.
+
+Since `midnight-node` depends on 2 tags of the ledger repository:
+* `ledger-6.1.0-alpha.4`, and
+* `hard-fork-test-ledger-6.1.0-alpha.4`,
+
+I have created two branches there (one for hard-fork, one normal):
+
+* [fix/cargo-vendor--ledger-6.1.0-alpha.4](https://github.com/blockfrost/midnight-ledger/tree/fix/cargo-vendor--ledger-6.1.0-alpha.4), and
+* [fix/cargo-vendor--hard-fork-test-ledger-6.1.0-alpha.4](https://github.com/blockfrost/midnight-ledger/tree/fix/cargo-vendor--hard-fork-test-ledger-6.1.0-alpha.4),
+
+against which this repository can be built, just to show it’s possible:
+
+```
+❯ nix build -L
+[…]
+
+❯ ./result/bin/midnight-node --version
+midnight-node 0.17.1
+```
+
+The next release, `ledger-6.1.0-alpha.5`, will probably contain this
+ledger patch, if it gets merged to their `main` in the meantime.
+---
+ Cargo.lock                 | 98 +++++++++++++++++++++++---------------
+ Cargo.toml                 | 36 +++++++-------
+ changes/added/nix-build.md |  6 +++
+ docs/Cargo.toml            |  4 ++
+ docs/src/lib.rs            |  1 +
+ flake.lock                 | 69 ++++++++++++++++++++++++---
+ flake.nix                  | 17 ++++++-
+ nix/package.nix            | 81 +++++++++++++++++++++++++++++++
+ 8 files changed, 248 insertions(+), 64 deletions(-)
+ create mode 100644 changes/added/nix-build.md
+ create mode 100644 docs/src/lib.rs
+ create mode 100644 nix/package.nix
+diff --git a/docs/Cargo.toml b/docs/Cargo.toml
+index 227c21f8f..480c39134 100644
+--- a/docs/Cargo.toml
++++ b/docs/Cargo.toml
+@@ -4,6 +4,10 @@ version = "0.1.0"
+ edition = "2024"
+ license-file.workspace = true
+ 
++[lib]
++path = "src/lib.rs"
++doctest = false
++
+ [dependencies]
+ 
+ [dev-dependencies]
+diff --git a/docs/src/lib.rs b/docs/src/lib.rs
+new file mode 100644
+index 000000000..de2fb1ac4
+--- /dev/null
++++ b/docs/src/lib.rs
+@@ -0,0 +1,1 @@
++//! This crate exists only to host docs.

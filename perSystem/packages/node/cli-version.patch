@@ -1,0 +1,13 @@
+diff --git a/node/src/cli.rs b/node/src/cli.rs
+index a4753192..5bf3c803 100644
+--- a/node/src/cli.rs
++++ b/node/src/cli.rs
+@@ -36,7 +36,7 @@ pub struct RunMidnight {
+ #[derive(Debug, clap::Parser)]
+ /// Midnight blockchain node. Run without <COMMAND> to start the node.
+ /// To see full config options, run with no args with env-var SHOW_CONFIG=TRUE or run --help
+-#[command(version)]
++#[command(version = env!("SUBSTRATE_CLI_IMPL_VERSION"))]
+ pub struct Cli {
+ 	#[command(subcommand)]
+ 	pub subcommand: Subcommand,
