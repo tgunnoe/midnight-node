@@ -1,31 +1,38 @@
 {
-  inputs.flake-utils.url = "github:numtide/flake-utils";
+  description = "Midnight node — flake-parts build, ported from midnight-performance";
 
-  outputs = { self, nixpkgs, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = nixpkgs.legacyPackages.${system};
-      isDarwin = pkgs.lib.hasSuffix "darwin" system;
-      isDarwinAArch64 = system == "aarch64-darwin";
-    in {
-      devShells.default = let rust = [];
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 
-      in pkgs.mkShell {
-        packages = with pkgs; [
-           earthly rustup clang pkg-config zlib
-        ] ++ (if isDarwin
-          then with pkgs.darwin; [ libiconv apple_sdk.frameworks.SystemConfiguration apple_sdk.frameworks.Security ]
-          else []);
-        buildInputs = [ pkgs.libclang ];
-        WASM_BUILD_STD=0;
-        LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-        PROTOC = "${pkgs.protobuf}/bin/protoc";
-        ROCKSDB_LIB_DIR = "${pkgs.rocksdb}/lib";
-        BINDGEN_EXTRA_CLANG_ARGS = with pkgs;
-          if isDarwinAArch64
-            then "-isystem ${darwin.apple_sdk.Libsystem}/include" else "";
-        shellHook = ''
-          . ./.envrc
-        '';
-      };
-    });
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = inputs:
+    inputs.flake-parts.lib.mkFlake {inherit inputs;} {
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      imports = [
+        ./perSystem
+      ];
+    };
+
+  nixConfig = {
+    extra-substituters = [
+      "https://cache.iog.io"
+    ];
+    extra-trusted-public-keys = [
+      "hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ="
+    ];
+    allow-import-from-derivation = true;
+  };
 }
